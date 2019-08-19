@@ -1,5 +1,11 @@
-import requests
+from tg import TgApi
 from fastai.vision import *
+
+import logging
+
+logging.basicConfig(format='[%(asctime)s] - %(name)s - %(funcName)s - %(levelname)s - %(message)s', 
+    handlers=[logging.StreamHandler(), logging.FileHandler('app.log')], level=logging.INFO)
+
 
 dogs = ['chihuahua',  'japanese spaniel',  'maltese dog',  'pekinese',  'shih-tzu',  'blenheim spaniel',  'papillon',  'toy terrier',  'rhodesian ridgeback',  
 'afghan hound',  'basset',  'beagle',  'bloodhound',  'bluetick',  'black-and-tan coonhound',  'walker hound',  'english foxhound',  'redbone',  'borzoi',  
@@ -30,55 +36,35 @@ cats = ['tabby',
  'tiger',
  'cheetah','madagascar cat']
 
+
 cd = cats+dogs
 
 if __name__ == '__main__':
-    print('run server')
-    with open('token.txt') as f:
-        token = f.read().strip()
-    base_url = 'https://api.telegram.org/bot%s/' % token
-    print('base_url', base_url)
-    print('load models')
+    logging.info('run server')
+    tg = TgApi()
+    logging.info('load models')
     breeder = load_learner('model')
     imagenet = load_learner('imagenet')
-    print('loaded')
-    start_update = requests.get(base_url + 'getUpdates').json()['result']
-    last_id = start_update[-1]['update_id'] if start_update else 0
-    print('ready')
-    while True:
-        updates = start_update = requests.get(base_url + 'getUpdates?offset=%d' % (last_id+1)).json()['result']
-        for u in updates:
-            try:
-                print('upd', u)
-                last_id = u['update_id']
-                uid = u['message']['chat']['id']
-                photo = u['message'].get('photo')
-                if not photo:
-                    send = base_url + 'sendMessage?chat_id=%d&text=%s' % (uid, 'Отправьте фото котика или пса')
-                    requests.get(send)
-                    continue
-                fid = photo[0]['file_id']
-                print('photo', photo[0])
-                file_path = requests.get(base_url + 'getFile?file_id=' + fid).json()['result']['file_path']
-                flink = 'https://api.telegram.org/file/bot' + token + '/' + file_path
-                print('pic', flink)
-                raw = requests.get(flink).content
-                img = open_image(BytesIO(raw))
-                pred_class,_,_ = imagenet.predict(img)
-                what = str(pred_class)
-                cat_or_dog = what in cd
-                print('imagenet', pred_class)
-                if not cat_or_dog:
-                    answer = 'Это не кот и не собака. Похоже на ' + what
-                    send = base_url + 'sendMessage?chat_id=%d&text=%s' % (uid, answer)
-                    requests.get(send)
-                else:
-                    breed,pred_idx,outputs = breeder.predict(img)
-                    confidence = float(outputs[pred_idx])
-                    print('pred', pred_class, breed, confidence)
-                    answer = str(breed).replace('_', ' ').capitalize() + ' (%.2f)' % confidence
-                    send = base_url + 'sendMessage?chat_id=%d&text=%s' % (uid, answer)
-                    requests.get(send)
-                
-            except Exception as e:
-                print('ERROR', e)
+    logging.info('ready')
+    for m in tg.get_message():
+        uid = m['chat']['id']
+        photo = m.get('photo')
+        if not photo:
+            tg.answer('Отправьте фото котика или пса', uid)
+            continue
+        logging.info('photo %s', photo[0])
+        raw = tg.get_file(photo[0]['file_id'])
+        img = open_image(BytesIO(raw))
+        pred_class,_,_ = imagenet.predict(img)
+        what = str(pred_class)
+        cat_or_dog = what in cd
+        logging.info('imagenet %s', pred_class)
+        if not cat_or_dog:
+            tg.answer('Это не кот и не собака. Похоже на ' + what, uid)
+        else:
+            breed,pred_idx,outputs = breeder.predict(img)
+            breed = str(breed).replace('_', ' ').capitalize()
+            confidence = float(outputs[pred_idx])
+            logging.info('prediction imagenet %s, main %s, confidence %.3f', pred_class, breed, confidence)
+            answer = breed + ' (%.2f)' % confidence
+            tg.answer(answer, uid)
